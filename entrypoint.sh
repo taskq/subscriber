@@ -10,4 +10,4 @@
 [ -z "${REDIS_PORT}" ] && REDIS_PORT="6379"
 
 
-./publisher -verbose -config "${CONFIG}" -redis-address "${REDIS_ADDRESS}:${REDIS_PORT}"
+./subscriber -verbose -config "${CONFIG}" -redis-address "${REDIS_ADDRESS}:${REDIS_PORT}"
