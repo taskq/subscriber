@@ -1,0 +1,6 @@
+{
+    "redis": {
+        "channel": "junk"
+    },
+    "plugins": []
+}

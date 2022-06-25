@@ -1,0 +1,327 @@
+---
+# yamllint disable rule:line-length
+# yamllint disable rule:truthy
+
+name: Release
+
+on:
+  push:
+    branches:
+      - '*'
+  pull_request:
+    branches:
+      - master
+
+jobs:
+
+  validate_new_version:
+    name: Validate new version
+    runs-on: ubuntu-latest
+    outputs:
+      planned_version: ${{ steps.validate_new_version.outputs.planned_version }}
+      version_file_exists: ${{ steps.validate_new_version.outputs.version_file_exists }}
+      tag_hash: ${{ steps.validate_new_version.outputs.tag_hash }}
+      can_create: ${{ steps.validate_new_version.outputs.can_create }}
+      tag_exists: ${{ steps.validate_new_version.outputs.tag_exists }}
+      branch_name: ${{ steps.validate_new_version.outputs.branch_name }}
+
+    steps:
+
+      - name: Check out code
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+
+      - name: Use latest released action
+        id: validate_new_version
+        uses: reinvented-stuff/validate-version-action@master
+        with:
+          version_filename: ".version"
+          github_token: "${{ secrets.GITHUB_TOKEN }}"
+          fail_on_error: true
+
+
+  build_and_test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    outputs:
+      job_status: ${{ job.status }}
+
+    needs:
+      - validate_new_version
+
+    env:
+      PLANNED_VERSION: ${{ needs.validate_new_version.outputs.planned_version }}
+      TAG_HASH: ${{ needs.validate_new_version.outputs.tag_hash }}
+      CAN_CREATE_RELEASE: ${{ needs.validate_new_version.outputs.can_create }}
+      TAG_EXISTS: ${{ needs.validate_new_version.outputs.tag_exists }}
+      BRANCH_NAME: ${{ needs.validate_new_version.outputs.branch_name }}
+      APP_NAME: "subcsriber"
+      TARGETOS: "linux"
+      TARGETARCH: "amd64"
+
+    if: >
+      needs.validate_new_version.outputs.branch_name != 'master' &&
+      github.event_name == 'push'
+
+    steps:
+
+      - name: Validate envionment variables
+        id: validate_envvars
+        shell: bash
+        run: |
+          [[ ! -z "PLANNED_VERSION" ]] || exit 2
+          [[ ! -z "TAG_HASH" ]] || exit 2
+          [[ ! -z "CAN_CREATE_RELEASE" ]] || exit 2
+          [[ ! -z "TAG_EXISTS" ]] || exit 2
+          [[ ! -z "BRANCH_NAME" ]] || exit 2
+
+
+      - name: Check out code
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+
+      - name: Login to Docker registry
+        id: docker_registry_login
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+
+      - name: Define Docker image ID and full name
+        id: set_docker_image_id
+        run: |
+          if [[ "${BRANCH_NAME}" == "master" ]]; then
+            short_suffix=""
+            long_suffix=""
+          else
+            short_suffix="${BRANCH_NAME:0:1}"
+            long_suffix="${BRANCH_NAME}"
+          fi
+
+          GITHUB_IMAGE_ID="$(echo "${{ github.repository }}/${APP_NAME}" | tr '[A-Z]' '[a-z]')"
+          GITHUB_IMAGE_FULL_NAME="${GITHUB_IMAGE_ID}:${PLANNED_VERSION}${long_suffix}"
+
+          echo "::debug::GITHUB_IMAGE_ID: ${GITHUB_IMAGE_ID}"
+          echo "::debug::GITHUB_IMAGE_FULL_NAME: ${GITHUB_IMAGE_FULL_NAME}"
+
+          echo "::set-output name=github_image_id::${GITHUB_IMAGE_ID}"
+          echo "::set-output name=github_image_full_name::${GITHUB_IMAGE_FULL_NAME}"
+
+
+      - name: Build Docker image
+        id: build_docker_image
+        shell: bash
+        run: >
+          docker build
+          --tag "ghcr.io/${{ steps.set_docker_image_id.outputs.github_image_full_name }}"
+          --build-arg BUILD_VERSION="${PLANNED_VERSION}"
+          --file Dockerfile
+          .
+
+
+      - name: Push Docker image to registry
+        run: |
+          docker push "ghcr.io/${{ steps.set_docker_image_id.outputs.github_image_full_name }}"
+
+
+      - name: Notify about build
+        uses: rest-gateway/notification-action@master
+        with:
+          message: |
+            <b>Build ${{env.APP_NAME}}:</b> ${{env.PLANNED_VERSION}} ${{env.BRANCH_NAME}}
+
+            <b>Docker image:</b>
+            ghcr.io/${{ steps.set_docker_image_id.outputs.github_image_full_name }}
+
+          recipient: "${{ secrets.NOTIFICATIONS_DEFAULT_RECIPIENT }}"
+          rest_gateway_url: "${{ secrets.REST_GATEWAY_API_URL }}"
+          rest_gateway_token: "${{ secrets.REST_GATEWAY_TOKEN }}"
+          rest_gateway_bot_name: "${{ secrets.REST_GATEWAY_BOT_NAME }}"
+
+
+      - name: Send out notification about release
+        uses: rest-gateway/notification-action@master
+        with:
+          message: "Release ${{env.PLANNED_VERSION}} happened for <b>${{env.APP_NAME}}</b>. Yay."
+          recipient: "${{ secrets.NOTIFICATIONS_DEFAULT_RECIPIENT }}"
+          rest_gateway_url: "${{ secrets.REST_GATEWAY_API_URL }}"
+          rest_gateway_token: "${{ secrets.REST_GATEWAY_TOKEN }}"
+          rest_gateway_bot_name: "${{ secrets.REST_GATEWAY_BOT_NAME }}"
+
+
+  release:
+    name: Build, Test, Packages
+    runs-on: ubuntu-latest
+
+    env:
+      PLANNED_VERSION: ${{ needs.validate_new_version.outputs.planned_version }}
+      TAG_HASH: ${{ needs.validate_new_version.outputs.tag_hash }}
+      CAN_CREATE_RELEASE: ${{ needs.validate_new_version.outputs.can_create }}
+      TAG_EXISTS: ${{ needs.validate_new_version.outputs.tag_exists }}
+      BRANCH_NAME: ${{ needs.validate_new_version.outputs.branch_name }}
+      APP_NAME: "subcsriber"
+
+    outputs:
+      job_status: ${{ job.status }}
+
+    needs:
+      - validate_new_version
+
+    if: >
+      needs.validate_new_version.outputs.branch_name == 'master' &&
+      github.event_name == 'push'
+
+    steps:
+
+      - name: Check out code
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+
+      - name: Validate envionment variables
+        id: validate_envvars
+        shell: bash
+        run: |
+          [[ ! -z "PLANNED_VERSION" ]] || exit 2
+          [[ ! -z "TAG_HASH" ]] || exit 2
+          [[ ! -z "CAN_CREATE_RELEASE" ]] || exit 2
+          [[ ! -z "TAG_EXISTS" ]] || exit 2
+          [[ ! -z "BRANCH_NAME" ]] || exit 2
+
+
+      - name: Login to Docker registry
+        id: docker_registry_login
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+
+      - name: Define Docker image ID and full name
+        id: set_docker_image_id
+        run: |
+          if [[ "${BRANCH_NAME}" == "master" ]]; then
+            short_suffix=""
+            long_suffix=""
+          else
+            short_suffix="${BRANCH_NAME:0:1}"
+            long_suffix="${BRANCH_NAME}"
+          fi
+
+          GITHUB_IMAGE_ID="$(echo "${{ github.repository }}/${APP_NAME}" | tr '[A-Z]' '[a-z]')"
+          GITHUB_IMAGE_FULL_NAME="${GITHUB_IMAGE_ID}:${PLANNED_VERSION}${long_suffix}"
+
+          echo "::debug::GITHUB_IMAGE_ID: ${GITHUB_IMAGE_ID}"
+          echo "::debug::GITHUB_IMAGE_FULL_NAME: ${GITHUB_IMAGE_FULL_NAME}"
+
+          echo "::set-output name=github_image_id::${GITHUB_IMAGE_ID}"
+          echo "::set-output name=github_image_full_name::${GITHUB_IMAGE_FULL_NAME}"
+
+
+      - name: Notify that docker image is about to be built
+        uses: rest-gateway/notification-action@master
+        with:
+          message: >-
+            Now building the docker image <b>${APP_NAME}</b>:
+            ${{ steps.set_docker_image_id.outputs.github_image_full_name }}
+          recipient: "${{ secrets.NOTIFICATIONS_DEFAULT_RECIPIENT }}"
+          rest_gateway_url: "${{ secrets.REST_GATEWAY_API_URL }}"
+          rest_gateway_token: "${{ secrets.REST_GATEWAY_TOKEN }}"
+          rest_gateway_bot_name: "${{ secrets.REST_GATEWAY_BOT_NAME }}"
+
+
+      - name: Build Docker image
+        id: build_docker_image
+        shell: bash
+        run: >
+          docker build
+          --tag "ghcr.io/${{ steps.set_docker_image_id.outputs.github_image_full_name }}"
+          --build-arg BUILD_VERSION="${PLANNED_VERSION}"
+          --file Dockerfile
+          .
+
+
+      - name: Push Docker image to registry
+        id: push_docker_image
+        run: |
+          docker push "ghcr.io/${{ steps.set_docker_image_id.outputs.github_image_full_name }}"
+
+
+      - name: Notify that docker image has been built and pushed
+        uses: rest-gateway/notification-action@master
+        with:
+          message: >-
+            Docker image successfully built and pushed:
+
+            ghcr.io/${{ steps.set_docker_image_id.outputs.github_image_full_name }}
+          recipient: "${{ secrets.NOTIFICATIONS_DEFAULT_RECIPIENT }}"
+          rest_gateway_url: "${{ secrets.REST_GATEWAY_API_URL }}"
+          rest_gateway_token: "${{ secrets.REST_GATEWAY_TOKEN }}"
+          rest_gateway_bot_name: "${{ secrets.REST_GATEWAY_BOT_NAME }}"
+
+
+      - name: Generate changelog
+        id: generate_changelog
+        uses: reinvented-stuff/changelog-render-action@master
+        with:
+          long_changelog_export_filename: ".long_changelog.md"
+          short_changelog_export_filename: ".short_changelog.md"
+          print_out_changelogs: true
+
+
+      - name: Create a new tag
+        if: >
+          needs.validate_new_version.outputs.can_create == 'true' &&
+          needs.validate_new_version.outputs.branch_name == 'master' &&
+          github.event_name == 'push'
+        run: |
+          curl --request POST --url https://api.github.com/repos/${{ github.repository }}/git/tags \
+          -H 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
+          -H 'content-type: application/json' \
+          --data '{"tag": "${env.PLANNED_VERSION}",
+            "message": "Pipeline build tag",
+            "object": "${{ github.sha }}",
+            "type": "commit",
+            "tagger": {
+              "name": "Alice from Wonderland",
+              "email": "noreply@localhost.localdomain",
+              "date": "${{steps.timestamp.outputs.timestamp}}"
+            }'
+
+
+      - name: Create a Release
+        id: create_release
+        if: >
+          needs.validate_new_version.outputs.can_create == 'true' &&
+          needs.validate_new_version.outputs.branch_name == 'master' &&
+          github.event_name == 'push'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{env.PLANNED_VERSION}}
+          release_name: v${{env.PLANNED_VERSION}}
+          body_path: ${{steps.generate_changelog.outputs.short_changelog_export_filename}}
+          draft: false
+          prerelease: false
+
+
+      - name: Notify about release
+        uses: rest-gateway/notification-action@master
+        with:
+          message: |
+            <b>Release ${{env.APP_NAME}}:</b> ${{env.PLANNED_VERSION}}
+
+            <b>Docker image:</b>
+            ghcr.io/${{ steps.set_docker_image_id.outputs.github_image_full_name }}
+
+            <b>Release:</b>
+            https://github.com/${{ github.repository }}/releases/tag/${{env.PLANNED_VERSION}}
+          recipient: "${{ secrets.NOTIFICATIONS_DEFAULT_RECIPIENT }}"
+          rest_gateway_url: "${{ secrets.REST_GATEWAY_API_URL }}"
+          rest_gateway_token: "${{ secrets.REST_GATEWAY_TOKEN }}"
+          rest_gateway_bot_name: "${{ secrets.REST_GATEWAY_BOT_NAME }}"
+
+...
