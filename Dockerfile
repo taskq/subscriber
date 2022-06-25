@@ -15,6 +15,9 @@ RUN GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -ldflags="-X 'main.BuildV
 
 FROM alpine:3.15
 
+LABEL org.opencontainers.image.authors="Pavel Kim <hello@pavelkim.com>"
+LABEL org.opencontainers.image.description="TaskQ Redis Publisher"
+
 ENV LISTEN_ADDRESS="0.0.0.0"
 ENV LISTEN_PORT="8080"
 ENV REDIS_ADDRESS="127.0.0.1"
