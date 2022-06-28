@@ -27,9 +27,11 @@ var Debug bool = false
 var DebugMetricsNotifierPeriod time.Duration = 60
 
 type PluginStruct struct {
-	Command  string `json:"command,omitempty"`
-	Filename string `json:"filename,omitempty"`
-	Symbol   plugin.Symbol
+	Filename                  string           `json:"filename,omitempty"`
+	RawConfiguration          *json.RawMessage `json:"configuration,omitempty"`
+	Symbol                    plugin.Symbol
+	ConfigurationStructSymbol plugin.Symbol
+	Configuration             interface{}
 }
 
 type RedisStruct struct {
@@ -38,8 +40,8 @@ type RedisStruct struct {
 }
 
 type ConfigurationStruct struct {
-	Plugins []PluginStruct `json:"plugins,omitempty"`
-	Redis   RedisStruct    `json:"redis,omitempty"`
+	Plugins map[string]PluginStruct `json:"plugins,omitempty"`
+	Redis   RedisStruct             `json:"redis,omitempty"`
 }
 
 type handleSignalParamsStruct struct {
@@ -96,19 +98,43 @@ func SetupPlugins(configuration *ConfigurationStruct) {
 	for item := range configuration.Plugins {
 
 		filename := configuration.Plugins[item].Filename
-		log.Info().Msgf("Plugin filename: %+v", filename)
+		log.Info().
+			Str("plugin", item).
+			Msgf("Plugin filename: %+v", filename)
 
 		pluginHandler, err := plugin.Open(filename)
 		if err != nil {
-			log.Fatal().Err(err).Msgf("Error while opening plugin file:", err)
+			log.Fatal().
+				Str("plugin", item).
+				Err(err).
+				Msgf("Error while opening plugin file")
 		}
 
 		symbol, err := pluginHandler.Lookup("ExecCommand")
 		if err != nil {
-			log.Fatal().Err(err).Msgf("Error while looking up a symbol:", err)
+			log.Fatal().
+				Str("plugin", item).
+				Err(err).
+				Msgf("Error while looking up a symbol")
 		}
 
-		configuration.Plugins[item].Symbol = symbol
+		if entry, ok := configuration.Plugins[item]; ok {
+			entry.Symbol = symbol
+
+			err = json.Unmarshal(
+				*configuration.Plugins[item].RawConfiguration,
+				&entry.Configuration,
+			)
+
+			if err != nil {
+				log.Fatal().
+					Str("plugin", item).
+					Err(err).
+					Msgf("Couldn't parse plugin configuration")
+			}
+
+			configuration.Plugins[item] = entry
+		}
 
 		log.Info().Msgf("symbol: '%v'", symbol)
 		log.Info().Msgf("configuration.Plugins[item]: '%v'", configuration.Plugins[item])
@@ -222,21 +248,29 @@ func main() {
 			Msgf("Recieved a message: %+v", result[1])
 
 		go func() {
-			var symbol_param string = result[1]
+			var symbol_param []byte = []byte(result[1])
 
-			for _, plugin := range Configuration.Plugins {
-				log.Info().Msgf("Processing payload with plugin %v", plugin.Command)
+			for plugin_name, plugin := range Configuration.Plugins {
+				log.Info().
+					Str("plugin_name", plugin_name).
+					Msgf("Processing payload with plugin %v", plugin)
 
-				symbol_result, err := plugin.Symbol.(func(string) (string, error))(symbol_param)
+				symbol_result, err := plugin.Symbol.(func([]byte, interface{}) ([]byte, error))([]byte(symbol_param), plugin.Configuration)
 
 				if err != nil {
-					log.Error().Err(err).Msgf("Couldn't call plugin")
+					log.Error().
+						Str("plugin_name", plugin_name).
+						Err(err).
+						Msgf("Couldn't call plugin")
 					continue
 				}
 
 				symbol_param = symbol_result
 
-				log.Info().Msgf("Plugin call result %v", symbol_result)
+				log.Info().
+					Str("plugin_name", plugin_name).
+					Str("symbol_result", string(symbol_result)).
+					Msgf("Plugin call result")
 
 			}
 		}()
