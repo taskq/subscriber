@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"plugin"
+	"strconv"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -247,15 +248,26 @@ func main() {
 			Int("payload_size", len(result[1])).
 			Msgf("Recieved a message: %+v", result[1])
 
+		result_unquoted, err := strconv.Unquote(result[1])
+		if err != nil {
+			log.Error().Err(err).Msgf("Couldn't unquote message")
+			continue
+		}
+
+		log.Info().
+			Str("channel", result[0]).
+			Int("unquoted_payload_size", len(result_unquoted)).
+			Msgf("Unquoted the message: %+v", result_unquoted)
+
 		go func() {
-			var symbol_param []byte = []byte(result[1])
+			var symbol_param []byte = []byte(result_unquoted)
 
 			for plugin_name, plugin := range Configuration.Plugins {
 				log.Info().
 					Str("plugin_name", plugin_name).
 					Msgf("Processing payload with plugin %v", plugin)
 
-				symbol_result, err := plugin.Symbol.(func([]byte, interface{}) ([]byte, error))([]byte(symbol_param), plugin.Configuration)
+				symbol_result, err := plugin.Symbol.(func([]byte, interface{}) ([]byte, error))(symbol_param, plugin.Configuration)
 
 				if err != nil {
 					log.Error().
