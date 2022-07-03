@@ -42,10 +42,19 @@ jobs:
 
   build_and_test:
     name: Build and Test
-    runs-on: ubuntu-latest
     outputs:
       job_status: ${{ job.status }}
       artifact_name: ${{ steps.set_artifact_name.outputs.name }}
+    strategy:
+      matrix:
+        platform:
+          - runs-on: ubuntu-latest
+            goos: linux
+          - runs-on: macos-10.15
+            goos: darwin
+        arch:
+          - 'amd64'
+    runs-on: ${{ matrix.platform.runs-on }}
 
     needs:
       - validate_new_version
@@ -57,7 +66,7 @@ jobs:
       TAG_EXISTS: ${{ needs.validate_new_version.outputs.tag_exists }}
       BRANCH_NAME: ${{ needs.validate_new_version.outputs.branch_name }}
       APP_NAME: "subscriber"
-      TARGETOS: "linux"
+      TARGETOS: "${{ matrix.platform.goos }}"
       TARGETARCH: "amd64"
 
     if: >
