@@ -2,5 +2,16 @@
     "redis": {
         "channel": "junk"
     },
-    "plugins": []
+
+    "plugins": {
+
+        "echo-conveyor": {
+            "filename": "plugin-echo-conveyor.so",
+            "configuration": {
+                "publisher_url": "http://127.0.0.1",
+                "publisher_channel": "super-junk"
+            }
+
+    }
+
 }
